@@ -1,5 +1,5 @@
 ---
-title: "GBM MTAP"
+title: "GBM MTAP Reference Build and Cell-Type Characterization"
 output: html_document
 date: "2025-05-28"
 ---
@@ -8,22 +8,121 @@ date: "2025-05-28"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+```{r fig.height=20, fig.width=20}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Load and prepare reference
+reference_list <- list(
+  GBM030_tumor   = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM030tumor.RDS"),
+  GBM049_tumor   = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM049tumor.RDS"),
+  GBM030_lymph   = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM030lymph.RDS"),
+  GBM030_myeloid = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM030myeloid.RDS"),
+  GBM049_lymph   = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM049lymph.RDS"),
+  GBM049_myeloid = readRDS("/home/mli110/GBM-MTAP/data/reference/GBM049myeloid.RDS")
+)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+reference_list$GBM030_tumor$celltype   <- "tumor"
+reference_list$GBM049_tumor$celltype   <- "tumor"
+reference_list$GBM030_lymph$celltype   <- as.character(Idents(reference_list$GBM030_lymph))
+reference_list$GBM030_myeloid$celltype <- as.character(Idents(reference_list$GBM030_myeloid))
+reference_list$GBM049_lymph$celltype   <- as.character(Idents(reference_list$GBM049_lymph))
+reference_list$GBM049_myeloid$celltype <- as.character(Idents(reference_list$GBM049_myeloid))
 
-```{r cars}
-sdfasfdasdf
+options(future.globals.maxSize = 100 * 1024^3)
+library(future.apply)
+plan("multisession", workers = 12)
+reference_list <- future_lapply(reference_list, SCTransform, verbose = FALSE, future.seed = TRUE)
+
+reference <- merge(
+  reference_list[[1]],
+  y = reference_list[-1],
+  add.cell.ids = names(reference_list)
+)
+DefaultAssay(reference) <- "SCT"
+
+# Get all variable features from all references
+all_var_features <- unique(unlist(lapply(reference_list, VariableFeatures)))
+length(all_var_features)  # Just to check
+VariableFeatures(reference) <- all_var_features
+
+print(unique(reference$celltype))
+
+label_map <- c(
+  # Group CD8 T cell subtypes
+  " CD8 EFF" = "CD8 T", "CD8 IFNG" = "CD8 T", "CD8 TEFF" = "CD8 T", 
+  "CD8 RM-GZMK" = "CD8 T", "CD8 RM-XCL1" = "CD8 T", "CD8 Naive" = "CD8 T", 
+  "MAIT T" = "CD8 T", "CD8 EX" = "CD8 T",
+  # Group CD4 T cell subtypes
+  "CD4 CM" = "CD4 T", "CD4 EM" = "CD4 T", "Th17" = "CD4 T", "CD4 Naive" = "CD4 T",
+  # T-reg and Gamma-Delta separate
+  "TREG" = "Treg", "GD T" = "GD T",        
+  # Group microglia
+  "MCG1" = "MCG", "MCG2" = "MCG", "MCG3" = "MCG", "MCG4" = "MCG", "MCG5" = "MCG",
+  # Group MDSC
+  "M-MDSC" = "MDSC","PMN-MDSC" = "MDSC", "E-MDSC" = "MDSC",
+  # NK cells
+  "NK1" = "NK", "NK2" = "NK", 
+  # B cells
+  "B cells" = "B", "Plasma" = "B",
+  # Cycling Cells
+  "CYC1" = "Cycling", "CYC2" = "Cycling",
+  # Macrophages
+  "MAC1" = "MAC1", "MAC2" = "MAC2",
+  # Myeloid Dendritic Cells
+  "MDC1" = "MDC", "MDC2" = "MDC",
+  # Neutrophil
+  "Neut"="Neut",
+  # Tumor
+  "tumor" = "Tumor"
+)
+reference$celltype_collapsed <- dplyr::recode(reference$celltype, !!!label_map)
+table(reference$celltype_collapsed, useNA = "always")
+
+reference <- RunPCA(reference, npcs = 30)
+elbow_plot <- ElbowPlot(reference, ndims = 30, reduction = "pca")
+ggsave("/home/mli110/GBM-MTAP/figures/reference_elbow_plot.png", elbow_plot, width = 6, height = 5, dpi = 300)
+reference <- RunUMAP(reference, dims = 1:21)
+umap_collapsed <- DimPlot(reference, group.by = "celltype_collapsed", label = TRUE, repel = TRUE) +
+  ggtitle("Reference UMAP by Collapsed Cell Type")
+ggsave("/home/mli110/GBM-MTAP/figures/reference_umap_collapsed_celltype.png", umap_collapsed, width = 8, height = 6, dpi = 300)
+
+saveRDS(reference, file = "/home/mli110/GBM-MTAP/rds objects/reference_merged_normalized_collapsed.RDS")
 ```
 
-## Including Plots
+```{r}
+library(patchwork)
 
-You can also embed plots, for example:
+cd8_plot  <- FeaturePlot(reference, features = c("CD8A", "CD8B", "GZMB"), ncol = 3)
+cd4_plot  <- FeaturePlot(reference, features = c("CD4", "IL7R"), ncol = 2)
+treg_plot <- FeaturePlot(reference, features = c("FOXP3", "IL2RA", "CTLA4"), ncol = 3)
+nk_plot   <- FeaturePlot(reference, features = c("NKG7", "GNLY", "KLRD1"), ncol = 3)
+b_plot    <- FeaturePlot(reference, features = c("MS4A1", "CD79A", "CD19"), ncol = 3)
+cycling_plot <- FeaturePlot(reference, features = c("MKI67", "TOP2A", "STMN1"), ncol = 3)
+microglia_plot <- FeaturePlot(reference, features = c("CX3CR1", "P2RY12", "TMEM119"), ncol = 3)
+myeloid_plot   <- FeaturePlot(reference, features = c("LYZ", "CD14", "FCGR3A", "S100A8"), ncol = 2)
+macrophage_plot <- FeaturePlot(reference, features = c("CD68", "CD163"), ncol = 2)
+m1_markers_plot <- FeaturePlot(reference, features = c("CD86", "CD80", "IL1B", "CXCL10"), ncol = 2)
+m2_markers_plot <- FeaturePlot(reference, features = c("CD163", "MRC1", "MSR1", "IL10"), ncol = 2)
+mdc_plot       <- FeaturePlot(reference, features = c("CLEC9A", "CD1C"), ncol = 2)
+neutrophil_plot <- FeaturePlot(reference, features = c("FCGR3B", "S100A9"), ncol = 2)
+tumor_plot      <- FeaturePlot(reference, features = c("SOX2", "OLIG2", "EGFR", "MTAP"), ncol = 2)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+pdf("/home/mli110/GBM-MTAP/figures/marker_featureplots_by_group.pdf", width = 12, height = 6)
+print(cd8_plot)
+print(cd4_plot)
+print(treg_plot)
+print(nk_plot)
+print(b_plot)
+print(cycling_plot)
+print(microglia_plot)
+print(myeloid_plot)
+print(macrophage_plot)
+print(m1_markers_plot)
+print(m2_markers_plot)
+print(mdc_plot)
+print(neutrophil_plot)
+print(tumor_plot)
+dev.off()
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
