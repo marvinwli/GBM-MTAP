@@ -41,6 +41,7 @@ cat("Using dims 1:", chosen_pcs, "for all queries.\n")
 
 # LIST QUERY SAMPLES
 sample_dirs <- list.dirs(path = query_dir_root, recursive = FALSE)
+options(future.globals.maxSize = 300 * 1024^3)
 
 # PROCESSING FUNCTION
 process_sample <- function(sample_dir) {
