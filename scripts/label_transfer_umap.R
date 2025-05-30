@@ -1,6 +1,9 @@
+# label_transfer_and_umap_parallel.R
+
 library(Seurat)
 library(dplyr)
 library(ggplot2)
+library(future.apply)
 
 # PARAMETERS
 reference_path <- "/home/mli110/GBM-MTAP/rds objects/reference_merged_normalized_collapsed.RDS"
@@ -9,6 +12,11 @@ output_dir <- "/home/mli110/GBM-MTAP/figures"
 data_output_dir <- "/home/mli110/GBM-MTAP/data/"
 umap_pdf_file <- file.path(output_dir, "query_umap_plots.pdf")
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(data_output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# --- Set parallel plan ---
+# You can set this from a SLURM job, e.g. --cpus-per-task=8
+plan("multicore", workers = 44) # Adjust number of workers to match your HPC allocation
 
 # LOAD REFERENCE & PICK PCs
 reference <- readRDS(reference_path)
@@ -68,8 +76,8 @@ process_sample <- function(sample_dir) {
   )
 }
 
-# PROCESS ALL SAMPLES
-results_list <- lapply(sample_dirs, process_sample)
+# PROCESS ALL SAMPLES IN PARALLEL!
+results_list <- future_lapply(sample_dirs, process_sample)
 names(results_list) <- basename(sample_dirs)
 
 # SAVE ALL UMAPs TO A SINGLE PDF
@@ -87,3 +95,4 @@ all_counts <- bind_rows(lapply(results_list, function(x) x$Cell_Type_Counts))
 write.csv(all_counts, file = file.path(data_output_dir, "results_celltype_counts_long.csv"), row.names = FALSE)
 
 cat("All results saved.\n")
+
